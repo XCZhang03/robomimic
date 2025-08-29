@@ -82,7 +82,7 @@ if __name__ == "__main__":
         "--dataset_types",
         type=str,
         nargs='+',
-        default=["ph"],
+        default=["all"],
         help="Dataset types to download datasets for (e.g. ph, mh, mg). Defaults to ph. Pass 'all' to download \
             datasets for all available dataset types per task, or directly specify the list of dataset types.",
     )
@@ -168,6 +168,6 @@ if __name__ == "__main__":
                                         repo_id=HF_REPO_ID,
                                         filename=DATASET_REGISTRY[task][dataset_type][hdf5_type]["url"],
                                         download_dir=download_dir,
-                                        check_overwrite=True,
+                                        check_overwrite=False,
                                     )
                             print("")

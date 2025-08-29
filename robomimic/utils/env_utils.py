@@ -243,6 +243,34 @@ def create_env_from_metadata(
     return env
 
 
+def create_empty_env_from_metadata(
+    env_meta,
+    env_name=None,  
+    render=False, 
+    render_offscreen=True, 
+    use_image_obs=False, 
+    use_depth_obs=False, 
+):
+    env_kwargs = env_meta['env_kwargs']
+    env_kwargs['env_name'] = "EmptyEnv"
+    env_kwargs['hard_reset'] = False
+    env_type = get_env_type(env_meta=env_meta)
+    lang = env_meta.get("lang", None)
+    
+    env = create_env(
+        env_type=env_type,
+        render=render, 
+        render_offscreen=render_offscreen, 
+        use_image_obs=use_image_obs, 
+        use_depth_obs=use_depth_obs, 
+        lang=lang,
+        **env_kwargs,
+    )
+    # check_env_version(env, env_meta)
+    return env
+
+
+
 def create_env_for_data_processing(
     env_meta,
     camera_names, 
