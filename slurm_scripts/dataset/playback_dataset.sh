@@ -10,4 +10,5 @@
 source /n/holylabs/ydu_lab/Lab/zhangxiangcheng/miniconda3/etc/profile.d/conda.sh
 conda activate robomimic
 cd /net/holy-isilon/ifs/rc_labs/ydu_lab/xczhang/DiffRL/robomimic_dataset/robomimic/
-python -m robomimic.scripts.playback_pose_datasets --dataset all
+
+python -m robomimic.scripts.playback_pose_datasets --dataset all --noise 0.5

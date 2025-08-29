@@ -76,6 +76,9 @@ import robomimic.utils.file_utils as FileUtils
 from robomimic.utils.vis_utils import depth_to_rgb
 from robomimic.envs.env_base import EnvBase, EnvType
 
+from pathlib import Path
+from PIL import Image
+
 
 # Define default cameras to use for each env type
 DEFAULT_CAMERAS = {
@@ -122,6 +125,16 @@ class CameraPoseWriter:
         poses_np["timesteps"] = np.array(self.timesteps)
         np.savez(os.path.join(self.save_path, "camera_poses.npz"), **poses_np)
 
+
+def noise_fn(actions: np.ndarray, noise: float, env):
+    traj_len = actions.shape[0]
+    noising_start=np.random.choice(traj_len)
+    if noise > 0:
+        noise = np.random.normal(0, noise, actions.shape)
+        actions[noising_start:] += noise[noising_start:]
+    action_low, action_high = env.env.action_spec
+    actions = np.clip(actions, action_low, action_high)
+    return actions
 
 def playback_trajectory_with_env(
     env, 
@@ -186,15 +199,16 @@ def playback_trajectory_with_env(
     for i in range(traj_len):
         if action_playback:
             env.step(actions[i])
-            empty_env.step(actions[i])
-            if i < traj_len - 1:
-                # check whether the actions deterministically lead to the same recorded states
-                state_playback = env.get_state()["states"]
-                if not np.all(np.equal(states[i + 1], state_playback)):
-                    err = np.linalg.norm(states[i + 1] - state_playback)
-                    print("warning: playback diverged by {} at step {}".format(err, i))
+            unwrapped_empty_env.step(actions[i])
+            # if i < traj_len - 1:
+            #     # check whether the actions deterministically lead to the same recorded states
+            #     state_playback = env.get_state()["states"]
+            #     if not np.all(np.equal(states[i + 1], state_playback)):
+            #         err = np.linalg.norm(states[i + 1] - state_playback)
+            #         print("warning: playback diverged by {} at step {}".format(err, i))
         else:
             env.reset_to({"states" : states[i]})
+            empty_env.copy_robot_state(env)
 
         # on-screen render
         if render:
@@ -267,7 +281,14 @@ def playback_trajectory_with_obs(
 def playback_dataset(args):
     # some arg checking
     if args.video_path is None:
-        args.video_path = os.path.dirname(args.dataset)
+        # args.video_path = os.path.dirname(args.dataset)
+        # Find the relative path of args.dataset to ./dataset
+        dataset_dir = Path("./datasets")
+        video_dir = str(dataset_dir) + f"_std_{args.noise}"
+        rel_dataset_path = os.path.relpath(args.dataset, str(dataset_dir))
+        print(f"Relative dataset path: {rel_dataset_path}")
+        args.video_path = os.path.join(video_dir, rel_dataset_path)
+        os.makedirs(args.video_path, exist_ok=True)
     write_video = (args.video_path is not None)
     assert not (args.render and write_video) # either on-screen or video but not both
 
@@ -373,8 +394,10 @@ def playback_dataset(args):
 
         # supply actions if using open-loop action playback
         actions = None
-        if args.use_actions:
-            actions = f["data/{}/actions".format(ep)][()]
+        # if args.use_actions:
+        # always use actions
+        actions = f["data/{}/actions".format(ep)][()]
+        actions = noise_fn(actions, args.noise, env)
 
         playback_trajectory_with_env(
             env=env, 
@@ -489,6 +512,13 @@ if __name__ == "__main__":
         "--first",
         action='store_true',
         help="use first frame of each episode",
+    )
+
+    parser.add_argument(
+        "--noise",
+        type=float,
+        default=0.0,
+        help="(optional) noise level to add to actions"
     )
 
     args = parser.parse_args()
