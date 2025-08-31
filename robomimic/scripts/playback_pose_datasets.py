@@ -150,6 +150,7 @@ def playback_trajectory_with_env(
     action_chunk=None,
     camera_names=None,
     first=False,
+    res=128,
 ):
     """
     Helper function to playback a single trajectory using the simulator environment.
@@ -175,22 +176,22 @@ def playback_trajectory_with_env(
     if action_chunk is None:
         action_chunk = video_skip
 
+    unwrapped_empty_env = empty_env.env
+    unwrapped_env = env.base_env
+    unwrapped_empty_env.copy_env_model(unwrapped_env)
     # load the initial state
     ## this reset call doesn't seem necessary.
     ## seems ok to remove but haven't fully tested it.
     ## removing for now
-    # env.reset()
+    env.reset()
     env.reset_to(initial_state)
-    unwrapped_empty_env = empty_env.env
-    unwrapped_env = env.base_env
-    unwrapped_empty_env.reset()
-    unwrapped_empty_env.copy_env_model(unwrapped_env)
-    unwrapped_empty_env.reset()
     unwrapped_empty_env.copy_robot_state(unwrapped_env)
 
     # update camera_names for available cameras
-    camera_names = list(set(unwrapped_env.sim.model.camera_names).intersection(unwrapped_empty_env.sim.model.camera_names).intersection(set(camera_names)))
-
+    camera_names = list(set(unwrapped_env.sim.model.camera_names).intersection(unwrapped_empty_env.sim.model.camera_names).intersection(set(camera_names)).intersection(set(video_writers.keys())))
+    if len(camera_names) == 0:
+        return
+    
     traj_len = states.shape[0]
     action_playback = (actions is not None)
     if action_playback:
@@ -218,14 +219,12 @@ def playback_trajectory_with_env(
         if write_video:
             if video_count % video_skip == 0:
                 for cam_name in camera_names:
-                    if cam_name in video_writers:
-                        video_img = env.render(mode="rgb_array", height=512, width=512, camera_name=cam_name)
-                        video_writers[cam_name].append_data(video_img)
-                        # video_img = np.concatenate(video_img, axis=1) # concatenate horizontally
-                        if 'robot' not in cam_name:
-                            cam_transform = unwrapped_empty_env.get_camera_transform(camera_name=cam_name, camera_height=512, camera_width=512)
-                            pose_image = unwrapped_empty_env.plot_pose(cam_transform, height=512, width=512)
-                            pose_video_writers[cam_name].append_data(pose_image)
+                    video_img = env.render(mode="rgb_array", height=res, width=res, camera_name=cam_name)
+                    video_writers[cam_name].append_data(video_img)
+                    if 'robot' not in cam_name:
+                        cam_transform = unwrapped_empty_env.get_camera_transform(camera_name=cam_name, camera_height=res, camera_width=res)
+                        pose_image = unwrapped_empty_env.plot_pose(cam_transform, height=res, width=res)
+                        pose_video_writers[cam_name].append_data(pose_image)
                 camera_pose_writer.append_data(unwrapped_empty_env.get_camera_pose(), video_count)
             if video_count % action_chunk == 0:
                 unwrapped_empty_env.copy_robot_state(unwrapped_env)
@@ -284,7 +283,7 @@ def playback_dataset(args):
         # args.video_path = os.path.dirname(args.dataset)
         # Find the relative path of args.dataset to ./dataset
         dataset_dir = Path("./datasets")
-        video_dir = str(dataset_dir) + f"_std_{args.noise}"
+        video_dir = str(dataset_dir) + f"_std_{args.noise}" + f"_{args.res}"
         rel_dataset_path = os.path.relpath(args.dataset, str(dataset_dir))
         print(f"Relative dataset path: {rel_dataset_path}")
         args.video_path = os.path.join(video_dir, rel_dataset_path)
@@ -351,12 +350,6 @@ def playback_dataset(args):
         print("Playing back episode: {}".format(ep), flush=True)
         video_dir = os.path.join(args.video_path, ep)
         os.makedirs(video_dir, exist_ok=True)
-        # if os.path.exists(os.path.join(video_dir, "args.json")):
-        #         prev_args = json.load(open(os.path.join(video_dir, "args.json"), 'r'))
-        #         camera_names = prev_args.get("render_image_names", [])
-        #         if all(cam in camera_names for cam in args.render_image_names):
-        #             print(f"skipping demo {ep} of dataset {args.dataset}", flush=True)
-        #             continue
 
         if args.use_obs:
             playback_trajectory_with_obs(
@@ -411,6 +404,7 @@ def playback_dataset(args):
             video_skip=args.video_skip,
             camera_names=args.render_image_names,
             first=args.first,
+            res=args.res
         )
         if write_video:
             for video_writer in video_writers.values():
@@ -520,11 +514,19 @@ if __name__ == "__main__":
         default=0.0,
         help="(optional) noise level to add to actions"
     )
+    parser.add_argument(
+        "--res",
+        type=int,
+        default=128,
+        help="The resolution of created videos"
+    )
 
     args = parser.parse_args()
     if args.dataset == 'all':
+        import multiprocessing
         from robomimic.scripts.download_datasets import DATASET_REGISTRY
         default_base_dir = os.path.join(robomimic.__path__[0], "../datasets")
+        tasks = []
         for task in DATASET_REGISTRY:
             for dataset_type in DATASET_REGISTRY[task]:
                 download_dir = os.path.abspath(os.path.join(default_base_dir, task, dataset_type))
@@ -532,11 +534,17 @@ if __name__ == "__main__":
                     continue
                 for file in os.listdir(download_dir):
                     if file.endswith(".hdf5"):
-                        print(f"\nPlaying back dataset file: {os.path.join(download_dir, file)}", flush=True)
                         from copy import deepcopy
                         cur_args = deepcopy(args)
                         cur_args.dataset = os.path.join(download_dir, file)
                         cur_args.video_path = None
-                        playback_dataset(cur_args)
+                        tasks.append(cur_args)
+
+        def worker(cur_args):
+            print(f"\nPlaying back dataset file: {cur_args.dataset}", flush=True)
+            playback_dataset(cur_args)
+
+        with multiprocessing.Pool(processes=min(len(tasks), multiprocessing.cpu_count())) as pool:
+            pool.map(worker, tasks)
     else:
         playback_dataset(args)
