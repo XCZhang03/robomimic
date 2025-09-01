@@ -528,6 +528,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if args.dataset == 'all':
         import threading
+        import multiprocessing as mp
         from robomimic.scripts.download_datasets import DATASET_REGISTRY
         default_base_dir = os.path.join(robomimic.__path__[0], "../datasets")
         tasks = []
@@ -547,13 +548,13 @@ if __name__ == "__main__":
         def worker(task_args):
             playback_dataset(task_args)
 
-        threads = []
+        processes = []
         for task_args in tasks:
-            t = threading.Thread(target=worker, args=(task_args,))
-            t.start()
-            threads.append(t)
+            p = mp.Process(target=worker, args=(task_args,))
+            p.start()
+            processes.append(p)
 
-        for t in threads:
-            t.join()
+        for p in processes:
+            p.join()
     else:
         playback_dataset(args)
