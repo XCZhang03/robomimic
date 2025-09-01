@@ -347,7 +347,6 @@ def playback_dataset(args):
 
     for ind in range(len(demos)):
         ep = demos[ind]
-        print("Playing back episode: {}".format(ep), flush=True)
         video_dir = os.path.join(args.video_path, ep)
         os.makedirs(video_dir, exist_ok=True)
 
@@ -369,14 +368,19 @@ def playback_dataset(args):
             for camera_name in args.render_image_names:
                 camera_video_path = os.path.join(video_dir, f"{camera_name}.mp4")
                 if os.path.exists(camera_video_path):
-                    print(f"skipping camera {camera_name}", flush=True)
+                    # print(f"skipping camera {camera_name}", flush=True)
                     continue
                 video_writers[camera_name] = imageio.get_writer(camera_video_path, fps=20)
                 if 'robot' not in camera_name:
                     pose_video_path = os.path.join(video_dir, f"{camera_name}_pose.mp4")
                     pose_video_writers[camera_name] = imageio.get_writer(pose_video_path, fps=20)
             camera_pose_writer = CameraPoseWriter(video_dir, empty_env.env.sim.model.camera_names)
+        
+        camera_names = list(set(env.base_env.sim.model.camera_names).intersection(empty_env.env.sim.model.camera_names).intersection(set(args.render_image_names)).intersection(set(video_writers.keys())))
+        if len(camera_names) == 0:
+            continue
 
+        print(f"Playing back episode: {ep} of env {rel_dataset_path}", flush=True)
 
         # prepare initial state to reload from
         states = f["data/{}/states".format(ep)][()]
@@ -402,7 +406,7 @@ def playback_dataset(args):
             pose_video_writers=pose_video_writers,
             camera_pose_writer=camera_pose_writer,
             video_skip=args.video_skip,
-            camera_names=args.render_image_names,
+            camera_names=camera_names,
             first=args.first,
             res=args.res
         )
@@ -523,7 +527,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     if args.dataset == 'all':
-        import multiprocessing
+        import threading
         from robomimic.scripts.download_datasets import DATASET_REGISTRY
         default_base_dir = os.path.join(robomimic.__path__[0], "../datasets")
         tasks = []
@@ -540,11 +544,16 @@ if __name__ == "__main__":
                         cur_args.video_path = None
                         tasks.append(cur_args)
 
-        def worker(cur_args):
-            print(f"\nPlaying back dataset file: {cur_args.dataset}", flush=True)
-            playback_dataset(cur_args)
+        def worker(task_args):
+            playback_dataset(task_args)
 
-        with multiprocessing.Pool(processes=min(len(tasks), multiprocessing.cpu_count())) as pool:
-            pool.map(worker, tasks)
+        threads = []
+        for task_args in tasks:
+            t = threading.Thread(target=worker, args=(task_args,))
+            t.start()
+            threads.append(t)
+
+        for t in threads:
+            t.join()
     else:
         playback_dataset(args)
