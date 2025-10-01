@@ -126,15 +126,40 @@ class CameraPoseWriter:
         np.savez(os.path.join(self.save_path, "camera_poses.npz"), **poses_np)
 
 
-def noise_fn(actions: np.ndarray, noise: float, env):
+def noise_fn(states: np.ndarray, actions: np.ndarray, noise: float, env, gripper_only=False, min_len: int=40):
+    if noise == 0:
+        return states, actions
     traj_len = actions.shape[0]
-    noising_start=np.random.choice(traj_len)
-    if noise > 0:
-        noise = np.random.normal(0, noise, actions.shape)
-        actions[noising_start:] += noise[noising_start:]
+    if min_len is None:
+        min_len = traj_len
+    noising_start=np.random.choice(traj_len - min_len) if traj_len > min_len else 0 # at least 8 frames (40 steps)
+    if actions.shape[-1] == 14:
+        gripper_index = [6, 13]
+    elif actions.shape[-1] == 7:
+        gripper_index = [6,]
+    else:
+        gripper_index = []
+    if len(gripper_index) > 0:
+        actions[noising_start:, gripper_index] = actions[noising_start:, gripper_index] * ((np.random.rand(traj_len - noising_start, len(gripper_index)) > noise).astype(np.float32) * 2 - 1)
+    gaussian_noise = np.random.normal(0, noise, actions.shape) if not gripper_only else np.zeros_like(actions)
+    actions[noising_start:] += gaussian_noise[noising_start:]
     action_low, action_high = env.env.action_spec
     actions = np.clip(actions, action_low, action_high)
-    return actions
+    actions = actions[noising_start:]
+    states = states[noising_start:]
+    return states, actions
+
+def split_trajectory(args, states: np.ndarray, actions: np.ndarray):
+    traj_len = args.traj_len
+    splits = []
+    start = 0
+    while start < states.shape[0]:
+        end = min(start + traj_len, states.shape[0])
+        if (args.eval and (end - start) < traj_len) or (not args.eval and (end - start) < 40):
+            break ## only retain full traj_len segments for eval
+        splits.append((states[start:end], actions[start:end]))
+        start += random.randint(20, 40) if not args.eval else (traj_len // 2) # 40 steps overlap, 8 frames
+    return splits
 
 def playback_trajectory_with_env(
     env, 
@@ -226,9 +251,9 @@ def playback_trajectory_with_env(
                         pose_image = unwrapped_empty_env.plot_pose(cam_transform, height=res, width=res)
                         pose_video_writers[cam_name].append_data(pose_image)
                 camera_pose_writer.append_data(unwrapped_empty_env.get_camera_pose(), video_count)
+            video_count += 1
             if video_count % action_chunk == 0:
                 unwrapped_empty_env.copy_robot_state(unwrapped_env)
-            video_count += 1
 
         if first:
             break
@@ -283,7 +308,8 @@ def playback_dataset(args):
         # args.video_path = os.path.dirname(args.dataset)
         # Find the relative path of args.dataset to ./dataset
         dataset_dir = Path("./datasets")
-        video_dir = str(dataset_dir) + f"_std_{args.noise}" + f"_{args.res}"
+        video_dir = str(dataset_dir) + f"_std_{args.noise}" + f"_{args.res}" + f"_chunk{args.action_chunk}" + (f"_gripper" if args.gripper_only else "") + (f"_len{args.traj_len}" if args.traj_len is not None else "") \
+            + (f"_eval" if args.eval else "")
         rel_dataset_path = os.path.relpath(args.dataset, str(dataset_dir))
         print(f"Relative dataset path: {rel_dataset_path}")
         args.video_path = os.path.join(video_dir, rel_dataset_path)
@@ -343,6 +369,7 @@ def playback_dataset(args):
         random.shuffle(demos)
         demos = demos[:args.n]
 
+    demos = demos[222:223]
     
 
     for ind in range(len(demos)):
@@ -361,67 +388,75 @@ def playback_dataset(args):
             )
             continue
 
-        # maybe dump video
-        if write_video:
-            video_writers = {}
-            pose_video_writers = {}
-            for camera_name in args.render_image_names:
-                camera_video_path = os.path.join(video_dir, f"{camera_name}.mp4")
-                if os.path.exists(camera_video_path):
-                    # print(f"skipping camera {camera_name}", flush=True)
-                    continue
-                video_writers[camera_name] = imageio.get_writer(camera_video_path, fps=20)
-                if 'robot' not in camera_name:
-                    pose_video_path = os.path.join(video_dir, f"{camera_name}_pose.mp4")
-                    pose_video_writers[camera_name] = imageio.get_writer(pose_video_path, fps=20)
-            camera_pose_writer = CameraPoseWriter(video_dir, empty_env.env.sim.model.camera_names)
-        
-        camera_names = list(set(env.base_env.sim.model.camera_names).intersection(empty_env.env.sim.model.camera_names).intersection(set(args.render_image_names)).intersection(set(video_writers.keys())))
-        if len(camera_names) == 0:
-            continue
-
-        print(f"Playing back episode: {ep} of env {rel_dataset_path}", flush=True)
-
         # prepare initial state to reload from
         states = f["data/{}/states".format(ep)][()]
-        initial_state = dict(states=states[0])
-        if is_robosuite_env:
-            initial_state["model"] = f["data/{}".format(ep)].attrs["model_file"]
-            initial_state["ep_meta"] = f["data/{}".format(ep)].attrs.get("ep_meta", None)
-
         # supply actions if using open-loop action playback
-        actions = None
+        # actions = None
         # if args.use_actions:
         # always use actions
         actions = f["data/{}/actions".format(ep)][()]
-        actions = noise_fn(actions, args.noise, env)
-
-        playback_trajectory_with_env(
-            env=env, 
-            empty_env=empty_env,
-            initial_state=initial_state, 
-            states=states, actions=actions, 
-            render=args.render, 
-            video_writers=video_writers, 
-            pose_video_writers=pose_video_writers,
-            camera_pose_writer=camera_pose_writer,
-            video_skip=args.video_skip,
-            camera_names=camera_names,
-            first=args.first,
-            res=args.res
-        )
-        if write_video:
-            for video_writer in video_writers.values():
-                video_writer.close()
-            for pose_video_writer in pose_video_writers.values():
-                pose_video_writer.close()
-            camera_pose_writer.close()
         # Dump states and actions for this episode
         np.save(os.path.join(video_dir, "states.npy"), states)
+        print("ep len:", states.shape[0])
         if actions is not None:
             np.save(os.path.join(video_dir, "actions.npy"), actions)
         with open(os.path.join(video_dir, "args.json"), "w") as f_args:
             json.dump(vars(args), f_args, indent=4)
+
+        for i, (seg_states, seg_actions) in enumerate(split_trajectory(args, states, actions)):
+
+            # maybe dump video
+            if write_video:
+                video_writers = {}
+                pose_video_writers = {}
+                for camera_name in args.render_image_names:
+                    camera_video_path = os.path.join(video_dir, f"{camera_name}_seg{i}.mp4")
+                    if os.path.exists(camera_video_path):
+                        # print(f"skipping camera {camera_name}", flush=True)
+                        continue
+                    video_writers[camera_name] = imageio.get_writer(camera_video_path, fps=20)
+                    if 'robot' not in camera_name:
+                        pose_video_path = os.path.join(video_dir, f"{camera_name}_seg{i}_pose.mp4")
+                        pose_video_writers[camera_name] = imageio.get_writer(pose_video_path, fps=20)
+                camera_pose_writer = CameraPoseWriter(video_dir, empty_env.env.sim.model.camera_names)
+            
+            camera_names = list(set(env.base_env.sim.model.camera_names).intersection(empty_env.env.sim.model.camera_names).intersection(set(args.render_image_names)).intersection(set(video_writers.keys())))
+            if len(camera_names) == 0:
+                continue
+
+            noised_states, noised_actions = noise_fn(seg_states, seg_actions, args.noise, env, gripper_only=args.gripper_only, min_len=None)
+
+            print(f"Playing back seg{i} of episode: {ep} of env {rel_dataset_path} with length {len(noised_states)}", flush=True)
+
+            initial_state = dict(states=noised_states[0])
+            if is_robosuite_env:
+                # initial_state["model"] = f["data/{}".format(ep)].attrs["model_file"]
+                initial_state["ep_meta"] = f["data/{}".format(ep)].attrs.get("ep_meta", None)
+
+
+            playback_trajectory_with_env(
+                env=env, 
+                empty_env=empty_env,
+                initial_state=initial_state, 
+                states=noised_states, actions=noised_actions, 
+                render=args.render, 
+                video_writers=video_writers, 
+                pose_video_writers=pose_video_writers,
+                camera_pose_writer=camera_pose_writer,
+                video_skip=args.video_skip,
+                camera_names=camera_names,
+                first=args.first,
+                res=args.res,
+                action_chunk=args.action_chunk,
+            )
+            if write_video:
+                for video_writer in video_writers.values():
+                    video_writer.close()
+                for pose_video_writer in pose_video_writers.values():
+                    pose_video_writer.close()
+                camera_pose_writer.close()
+            
+    
     f.close()
     
         
@@ -491,7 +526,7 @@ if __name__ == "__main__":
         "--render_image_names",
         type=str,
         nargs='+',
-        default=['agentview', 'robot0_eye_in_hand', 'sideview'],
+        default=['agentview', 'frontview', 'sideview', 'birdview'],
         help="(optional) camera name(s) / image observation(s) to use for rendering on-screen or to video. Default is"
              "None, which corresponds to a predefined camera for each env type",
     )
@@ -524,8 +559,32 @@ if __name__ == "__main__":
         default=128,
         help="The resolution of created videos"
     )
+    parser.add_argument(
+        "--action-chunk",
+        type=int,
+        default=None,
+        help="(optional) number of steps between copying robot state from env to empty_env during"
+    )
+    parser.add_argument(
+        "--gripper-only",
+        action='store_true',
+        help="if true, only add noise to gripper actions"
+    )
+    parser.add_argument(
+        "--traj-len",
+        type=int,
+        default=None,
+        help="(optional) if provided, only playback random traj_len steps of each trajectory"
+    )
+    parser.add_argument(
+        "--eval",
+        action='store_true',
+        help="if true, generate eval videos, maximizing length"
+    )
 
     args = parser.parse_args()
+    if args.action_chunk is None:
+        args.action_chunk = args.video_skip
     if args.dataset == 'all':
         import threading
         import multiprocessing as mp
