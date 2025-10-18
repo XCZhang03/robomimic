@@ -151,6 +151,8 @@ def noise_fn(states: np.ndarray, actions: np.ndarray, noise: float, env, gripper
 
 def split_trajectory(args, states: np.ndarray, actions: np.ndarray):
     traj_len = args.traj_len
+    if traj_len is None or traj_len == -1:
+        return [(states, actions)]
     splits = []
     start = 0
     while start < states.shape[0]:
@@ -368,8 +370,6 @@ def playback_dataset(args):
     if args.n is not None:
         random.shuffle(demos)
         demos = demos[:args.n]
-
-    demos = demos[222:223]
     
 
     for ind in range(len(demos)):
