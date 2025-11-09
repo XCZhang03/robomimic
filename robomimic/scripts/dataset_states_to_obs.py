@@ -68,6 +68,7 @@ def extract_trajectory(
     actions,
     actions_abs,
     done_mode,
+    use_actions=False,
     camera_names=None, 
     camera_height=84, 
     camera_width=84,
@@ -119,9 +120,14 @@ def extract_trajectory(
     for t in range(1, traj_len + 1):
 
         # get next observation
-        if t == traj_len:
+        if t == traj_len or use_actions:
             # play final action to get next observation for last timestep
             next_obs, _, _, _ = env.step(actions[t - 1])
+            # check whether the actions deterministically lead to the same recorded states
+            state_playback = env.get_state()["states"]
+            if t < traj_len and not np.all(np.equal(states[t], state_playback)):
+                err = np.linalg.norm(states[t] - state_playback)
+                # print("warning: playback diverged by {} at step {}".format(err, t))
         else:
             # reset to simulator state to get observation
             next_obs = env.reset_to({"states" : states[t]})
@@ -164,7 +170,7 @@ def extract_trajectory(
         else:
             traj[k] = np.array(traj[k])
 
-    return traj, camera_info
+    return traj, env.is_success()['task'], camera_info
 
 
 def get_camera_info(

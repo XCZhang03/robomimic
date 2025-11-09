@@ -151,20 +151,20 @@ def process_demo_batch(process_id, args, env_meta, work_queue, result_queue, pro
             
             # prepare states to reload from
             is_robosuite_env = EnvUtils.is_robosuite_env(env_meta)
-            is_simpler_env = EnvUtils.is_simpler_env(env_meta) or EnvUtils.is_simpler_ov_env(env_meta)
-            is_factory_env = EnvUtils.is_factory_env(env_meta) or EnvUtils.is_furniture_sim_env(env_meta)
+            # is_simpler_env = EnvUtils.is_simpler_env(env_meta) or EnvUtils.is_simpler_ov_env(env_meta)
+            # is_factory_env = EnvUtils.is_factory_env(env_meta) or EnvUtils.is_furniture_sim_env(env_meta)
 
-            if is_simpler_env or is_factory_env:
-                # states are dictionaries - make list of dictionaries
-                traj_len = f["data/{}/actions".format(ep)].shape[0]
-                states = []
-                state_grp = f["data/{}/states".format(ep)]
-                for i in range(traj_len):
-                    states.append(
-                        { k : np.array(state_grp[k][i]) for k in state_grp }
-                    )
-            else:
-                states = f["data/{}/states".format(ep)][()]
+            # if is_simpler_env or is_factory_env:
+            #     # states are dictionaries - make list of dictionaries
+            #     traj_len = f["data/{}/actions".format(ep)].shape[0]
+            #     states = []
+            #     state_grp = f["data/{}/states".format(ep)]
+            #     for i in range(traj_len):
+            #         states.append(
+            #             { k : np.array(state_grp[k][i]) for k in state_grp }
+            #         )
+            # else:
+            states = f["data/{}/states".format(ep)][()]
             
             initial_state = dict(states=states[0])
             if is_robosuite_env:
@@ -174,7 +174,7 @@ def process_demo_batch(process_id, args, env_meta, work_queue, result_queue, pro
 
             # extract obs, rewards, dones
             actions = f["data/{}/actions".format(ep)][()]
-            actions_abs = f["data/{}/actions_abs".format(ep)][()]
+            actions_abs = f["data/{}/actions_abs".format(ep)][()] if "actions_abs" in f["data/{}".format(ep)] else None
             traj, is_success, camera_info = extract_trajectory(
                 env=env, 
                 initial_state=initial_state, 
@@ -200,12 +200,12 @@ def process_demo_batch(process_id, args, env_meta, work_queue, result_queue, pro
             #            consistent as well
             ep_data_grp = data_grp.create_group(ep)
             ep_data_grp.create_dataset("actions", data=np.array(traj["actions"]))
-            ep_data_grp.create_dataset("actions_abs", data=np.array(traj["actions_abs"]))
-            if is_simpler_env or is_factory_env:
-                for k in traj["states"]:
-                    ep_data_grp.create_dataset("states/{}".format(k), data=np.array(traj["states"][k]))
-            else:
-                ep_data_grp.create_dataset("states", data=np.array(traj["states"]))
+            # ep_data_grp.create_dataset("actions_abs", data=np.array(traj["actions_abs"]))
+            # if is_simpler_env or is_factory_env:
+            #     for k in traj["states"]:
+            #         ep_data_grp.create_dataset("states/{}".format(k), data=np.array(traj["states"][k]))
+            # else:
+            ep_data_grp.create_dataset("states", data=np.array(traj["states"]))
             ep_data_grp.create_dataset("rewards", data=np.array(traj["rewards"]))
             ep_data_grp.create_dataset("dones", data=np.array(traj["dones"]))
             for k in traj["obs"]:
@@ -534,21 +534,21 @@ if __name__ == "__main__":
         "--camera_names",
         type=str,
         nargs='+',
-        default=[],
+        default=["agentview", "robot0_eye_in_hand"],
         help="(optional) camera name(s) to use for image observations. Leave out to not use image observations.",
     )
 
     parser.add_argument(
         "--camera_height",
         type=int,
-        default=84,
+        default=128,
         help="(optional) height of image observations",
     )
 
     parser.add_argument(
         "--camera_width",
         type=int,
-        default=84,
+        default=128,
         help="(optional) width of image observations",
     )
 
@@ -624,7 +624,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num_procs",
         type=int,
-        default=1,
+        default=10,
         help="number of parallel processes to use for extraction",
     )
 
