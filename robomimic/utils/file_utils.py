@@ -107,7 +107,10 @@ def get_env_metadata_from_dataset(dataset_path, set_env_specific_obs_processors=
     """
     dataset_path = os.path.expanduser(dataset_path)
     f = h5py.File(dataset_path, "r")
-    env_meta = json.loads(f["data"].attrs["env_args"])
+    try:
+        env_meta = json.loads(f["data"].attrs["env_args"])
+    except KeyError:
+        raise KeyError("Could not find env metadata in dataset at: {}".format(dataset_path))
     if "env_lang" in env_meta["env_kwargs"]: del env_meta["env_kwargs"]["env_lang"]
 
     f.close()
